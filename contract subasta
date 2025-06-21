@@ -1,0 +1,126 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.15;
+
+contract Auction {
+    address public owner;
+    uint256 public endTime;
+    uint256 public commission = 2; // 2%
+    uint256 public minBidIncrement = 5; // 5%
+
+    struct Bid {
+        address bidder;
+        uint256 amount;
+    }
+
+    address public winner;
+    uint256 public highestBid;
+    mapping(address => uint256) public bids;
+    Bid[] public bidHistory;
+    bool public ended;
+
+    event NewBid(address indexed bidder, uint256 amount);
+    event AuctionEnded(address winner, uint256 amount);
+
+    modifier onlyWhileAuctionActive() {
+        require(block.timestamp < endTime, "The auction has already ended");
+        _;
+    }
+
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Only the owner can perform this action");
+        _;
+    }
+
+    constructor(uint256 _durationInSeconds) {
+        owner = msg.sender;
+        endTime = block.timestamp + _durationInSeconds;
+    }
+
+    function placeBid() public payable onlyWhileAuctionActive {
+        require(msg.value > 0, "You must send ETH to place a bid");
+
+        uint256 minIncrement = highestBid == 0
+            ? 0
+            : highestBid + (highestBid * minBidIncrement) / 100;
+
+        require(msg.value >= minIncrement, "The bid must be at least 5% higher than the current highest");
+
+        require(bids[msg.sender] == 0, "You already placed a bid. Use increment instead.");
+
+        bids[msg.sender] = msg.value;
+        bidHistory.push(Bid(msg.sender, msg.value));
+        highestBid = msg.value;
+        winner = msg.sender;
+
+        if (endTime - block.timestamp < 10 minutes) {
+            endTime += 10 minutes;
+        }
+
+        emit NewBid(msg.sender, msg.value);
+    }
+
+    function endAuction() public onlyOwner {
+        require(!ended, "The auction has already ended");
+        require(block.timestamp >= endTime, "The auction is still ongoing");
+
+        ended = true;
+
+        uint256 total = address(this).balance;
+        uint256 commissionAmount = (total * commission) / 100;
+        uint256 winnerAmount = total - commissionAmount;
+
+        payable(owner).transfer(commissionAmount);
+        payable(winner).transfer(winnerAmount);
+
+        emit AuctionEnded(winner, highestBid);
+    }
+
+    function getWinner() public view returns (address, uint256) {
+        return (winner, highestBid);
+    }
+
+    function getBidHistory() public view returns (Bid[] memory) {
+        return bidHistory;
+    }
+
+    function getBidderInfo(address bidder) public view returns (uint256 amount, bool isWinner) {
+        amount = bids[bidder];
+        isWinner = (bidder == winner);
+    }
+
+    function getAuctionDetails() public view returns (
+        address _owner,
+        uint256 _endTime,
+        uint256 _highestBid,
+        address _winner,
+        bool _ended,
+        uint256 _totalBidders,
+        uint256 _contractBalance
+    ) {
+        _owner = owner;
+        _endTime = endTime;
+        _highestBid = highestBid;
+        _winner = winner;
+        _ended = ended;
+        _totalBidders = bidHistory.length;
+        _contractBalance = address(this).balance;
+    }
+
+    function getRemainingTime() public view returns (uint256 secondsLeft) {
+        if (block.timestamp >= endTime) {
+            return 0;
+        }
+        return endTime - block.timestamp;
+    }
+
+    function withdrawNonWinners() public {
+        require(ended, "The auction has not ended yet");
+        require(msg.sender != winner, "The winner cannot withdraw");
+
+        uint256 amount = bids[msg.sender];
+        require(amount > 0, "You have nothing to withdraw");
+
+        bids[msg.sender] = 0;
+        payable(msg.sender).transfer(amount);
+    }
+}
